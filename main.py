@@ -3,13 +3,14 @@ import json
 import asyncio
 import ipaddress
 
-from v2 import validar
-from v2 import consultar
+from funcionalidades import validar
+from funcionalidades import consultar
 
 def generar_csv_reporte(reporte_maestro):
     nombre_archivo = "prueba_mixto.csv"
 
     todos_los_dominios = set()
+
     for datos in reporte_maestro.values():
 
         if datos["resultado"] == "AUDITORIA":
@@ -18,7 +19,7 @@ def generar_csv_reporte(reporte_maestro):
                     todos_los_dominios.update(hallazgo["dominios"].split(", "))
 
     columnas_dnsbl = sorted(todos_los_dominios)
-    encabezados = ["Bloque", "IPs Muestra", "Resultado"] + columnas_dnsbl + ["Total Listas"]
+    encabezados = ["Bloque", "Direcciones con hallazgo", "Resultado"] + columnas_dnsbl
 
 
     with open(nombre_archivo, mode="w", newline="", encoding="utf-8") as archivo:
@@ -27,14 +28,11 @@ def generar_csv_reporte(reporte_maestro):
 
         for segmento, datos in reporte_maestro.items():
             resultado = datos["resultado"]
-            ips_muestra = " | ".join(str(ip) for ip in datos["ips_muestreadas"])
 
             if resultado in ("LIMPIO", "BLOQUEO"):
                 fila = {
                     "Bloque": segmento,
-                    "IPs Muestra": ips_muestra,
                     "Resultado": resultado,
-                    "Total Listas": len(datos["ips"]) if datos["ips"] else 0,
                 }
 
                 for dominio in columnas_dnsbl:
@@ -46,7 +44,7 @@ def generar_csv_reporte(reporte_maestro):
                 if not datos["ips"]:
                     writer.writerow({
                         "Bloque": segmento,
-                        "IPs Muestra": "",
+                        "Direcciones": "",
                         "Resultado": resultado,
                         "Total Listas": 0,
                         **{d: "" for d in columnas_dnsbl},
@@ -61,7 +59,7 @@ def generar_csv_reporte(reporte_maestro):
                     
                     fila = {
                         "Bloque": segmento,
-                        "IPs Muestra": ip_str,
+                        "Direccion": ip_str,
                         "Resultado": resultado,
                     }
 
@@ -94,7 +92,7 @@ async def comprobar_subredes_blacklist(subredes):
     Funcion principal, es el "orquestador"
 
     Args:
-        None: Subredes a validar y sub dividir
+        string: Subredes a validar y sub dividir
 
     Returns:
         string: None
@@ -108,11 +106,13 @@ async def comprobar_subredes_blacklist(subredes):
         return
 
     bloques = dividir_bloque(subredes)
+
     for bloque in bloques:
         print(bloque)
 
     try:
         respuesta = await consultar(bloques)
+        
     except Exception as e:
         print(f"error:Error consultar -  {e}")
         return None
