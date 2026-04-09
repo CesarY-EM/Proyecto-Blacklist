@@ -11,6 +11,7 @@ def generar_csv_reporte(reporte_maestro):
 
     todos_los_dominios = set()
     for datos in reporte_maestro.values():
+
         if datos["resultado"] == "AUDITORIA":
             for hallazgo in datos["ips"]:
                 if hallazgo and isinstance(hallazgo["dominios"], str):
@@ -18,6 +19,7 @@ def generar_csv_reporte(reporte_maestro):
 
     columnas_dnsbl = sorted(todos_los_dominios)
     encabezados = ["Bloque", "IPs Muestra", "Resultado"] + columnas_dnsbl + ["Total Listas"]
+
 
     with open(nombre_archivo, mode="w", newline="", encoding="utf-8") as archivo:
         writer = csv.DictWriter(archivo, fieldnames=encabezados)
@@ -40,6 +42,7 @@ def generar_csv_reporte(reporte_maestro):
                 writer.writerow(fila)
                 
             elif resultado == "AUDITORIA":
+
                 if not datos["ips"]:
                     writer.writerow({
                         "Bloque": segmento,
@@ -53,8 +56,7 @@ def generar_csv_reporte(reporte_maestro):
                 for h in datos["ips"]:
                     if not h:
                         continue
-                    
-                    # Asegurar que ip sea string con formato correcto
+                
                     ip_str = str(h["ip"]) if not isinstance(h["ip"], str) else h["ip"]
                     
                     fila = {
@@ -62,13 +64,16 @@ def generar_csv_reporte(reporte_maestro):
                         "IPs Muestra": ip_str,
                         "Resultado": resultado,
                     }
+
                     conteo = 0
+
                     for dominio in columnas_dnsbl:
                         if dominio in h["dominios"]:
                             fila[dominio] = 1
                             conteo += 1
                         else:
                             fila[dominio] = 0
+
                     fila["Total Listas"] = conteo
                     writer.writerow(fila)
 
@@ -85,8 +90,19 @@ def dividir_bloque(red, prefijo=24):
 
 async def comprobar_subredes_blacklist(subredes):
 
+    """
+    Funcion principal, es el "orquestador"
+
+    Args:
+        None: Subredes a validar y sub dividir
+
+    Returns:
+        string: None
+    """
+
     respuesta = False
     validos = validar([subredes])
+
     if not validos:
         print("error: Direcciones no validas")
         return

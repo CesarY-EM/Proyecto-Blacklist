@@ -17,7 +17,7 @@ _local= threading.local()
 
 
 MAX_WORKERS = 25
-UMBRAL = 1.0
+UMBRAL = 0.8
 TAMANO_MUESTRA = 13
 
 
