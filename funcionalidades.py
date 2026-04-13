@@ -148,11 +148,13 @@ async def analizar_bloques(bloque, loop, executor):
     ]
     resultados_muestra = await asyncio.gather(*verificar_muestra)
     resultado = evaluar(resultados_muestra, len(muestra))
-   
+    
     if resultado == "BLOQUEO":
         print(f"{bloque} terminado")
         return {
             "bloque": str(bloque),
+            "hallazgos":[],
+            "muestras":[],
             "resultado": "BLOQUEO",
         }
 
@@ -160,6 +162,8 @@ async def analizar_bloques(bloque, loop, executor):
         print(f"{bloque} terminado")
         return {
             "bloque": str(bloque),
+            "hallazgos":[],
+            "muestras":[],
             "resultado": "LIMPIO",
         }
 
@@ -167,7 +171,7 @@ async def analizar_bloques(bloque, loop, executor):
         # AUDITORIA — consultar todas las direcciones que no estaban en la muestra
 
         print(f"{bloque} terminado")
-        hallazgos = consulta_exhaustiva(todas, loop, executor)
+        hallazgos = await consulta_exhaustiva(todas, loop, executor)
         
         return {
             "bloque": str(bloque),
@@ -190,10 +194,10 @@ async def consultar(bloques):
         reporte = {}
         for r in resultados:
             bloque = r["bloque"]
-            reporte[bloque] = { "ips" : r["hallazgos"],
+            reporte[bloque] = {"ips" : r["hallazgos"],
                                 "resultado": r["resultado"]
                                 }
-        
+    
         return reporte
     
     finally:

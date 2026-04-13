@@ -1,80 +1,80 @@
-import csv
 import json
 import asyncio
 import ipaddress
 
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font
+
 from funcionalidades import validar
 from funcionalidades import consultar
 
-def generar_csv_reporte(reporte_maestro):
-    nombre_archivo = "prueba_mixto.csv"
+def generar_excel_reporte(reporte_maestro):
+    nombre_archivo = f"reporte_prueba.xlsx"
+    wb = Workbook()
+
+    negrita = Font(bold=True)
 
     todos_los_dominios = set()
-
     for datos in reporte_maestro.values():
-
         if datos["resultado"] == "AUDITORIA":
-            for hallazgo in datos["ips"]:
-                if hallazgo and isinstance(hallazgo["dominios"], str):
-                    todos_los_dominios.update(hallazgo["dominios"].split(", "))
-
+            for h in datos["ips"]:
+                if h and isinstance(h["dominios"], str):
+                    todos_los_dominios.update(h["dominios"].split(", "))
     columnas_dnsbl = sorted(todos_los_dominios)
-    encabezados = ["Bloque", "Direcciones con hallazgo", "Resultado"] + columnas_dnsbl
 
+    # Pestaña BLOQUEO
+    ws_bloqueo = wb.active
+    ws_bloqueo.title = "BLOQUEO"
+    ws_bloqueo.append(["Bloque", "Resultado"])
+    for cell in ws_bloqueo[1]:
+        cell.font = negrita
 
-    with open(nombre_archivo, mode="w", newline="", encoding="utf-8") as archivo:
-        writer = csv.DictWriter(archivo, fieldnames=encabezados)
-        writer.writeheader()
+    for segmento, datos in reporte_maestro.items():
+        if datos["resultado"] != "BLOQUEO":
+            continue
+        ws_bloqueo.append([segmento, "BLOQUEO"])
 
-        for segmento, datos in reporte_maestro.items():
-            resultado = datos["resultado"]
+    # Pestaña LIMPIO
+    ws_limpio = wb.create_sheet("LIMPIO")
+    ws_limpio.append(["Bloque", "Resultado"])
+    for cell in ws_limpio[1]:
+        cell.font = negrita
 
-            if resultado in ("LIMPIO", "BLOQUEO"):
-                fila = {
-                    "Bloque": segmento,
-                    "Resultado": resultado,
-                }
+    for segmento, datos in reporte_maestro.items():
+        if datos["resultado"] != "LIMPIO":
+            continue
+        ws_limpio.append([segmento, "LIMPIO"])
 
-                for dominio in columnas_dnsbl:
-                    fila[dominio] = ""
-                writer.writerow(fila)
-                
-            elif resultado == "AUDITORIA":
+    # ── Pestaña AUDITORIA ─────────────────────────────────────────────────
+    ws_auditoria = wb.create_sheet("AUDITORIA")
+    encabezados_auditoria = ["Bloque", "IP's", "resultado"] + columnas_dnsbl
+    ws_auditoria.append(encabezados_auditoria)
+    for cell in ws_auditoria[1]:
+        cell.font = negrita
 
-                if not datos["ips"]:
-                    writer.writerow({
-                        "Bloque": segmento,
-                        "Direcciones": "",
-                        "Resultado": resultado,
-                        "Total Listas": 0,
-                        **{d: "" for d in columnas_dnsbl},
-                    })
-                    continue
+    for segmento, datos in reporte_maestro.items():
+        if datos["resultado"] != "AUDITORIA":
+            continue
+        if not datos["ips"]:
+            ws_auditoria.append([segmento, "N/A", "AUDITORIA"] + [""] * len(columnas_dnsbl) + [0])
+            continue
+        for h in datos["ips"]:
+            if not h:
+                continue
+            conteo = 0
+            cols = []
+            for dominio in columnas_dnsbl:
+                if dominio in h["dominios"]:
+                    cols.append(1)
+                    conteo += 1
+                else:
+                    cols.append(0)
+            fila = [segmento, h["ip"], "AUDITORIA"] + cols + [conteo]
+            ws_auditoria.append(fila)
 
-                for h in datos["ips"]:
-                    if not h:
-                        continue
-                
-                    ip_str = str(h["ip"]) if not isinstance(h["ip"], str) else h["ip"]
-                    
-                    fila = {
-                        "Bloque": segmento,
-                        "Direccion": ip_str,
-                        "Resultado": resultado,
-                    }
-
-                    conteo = 0
-
-                    for dominio in columnas_dnsbl:
-                        if dominio in h["dominios"]:
-                            fila[dominio] = 1
-                            conteo += 1
-                        else:
-                            fila[dominio] = 0
-
-                    fila["Total Listas"] = conteo
-                    writer.writerow(fila)
-
+    wb.save(nombre_archivo)
+    print(f"✅ Reporte generado exitosamente: {nombre_archivo}")
+    return nombre_archivo
 
 def dividir_bloque(red, prefijo=24):
 
@@ -122,13 +122,13 @@ async def comprobar_subredes_blacklist(subredes):
         return None
     
     print("--- Generando reporte final ---")
-    generar_csv_reporte(respuesta)
+    generar_excel_reporte(respuesta)
     
     return respuesta
         
 
 if __name__ == "__main__":
-    respuesta = asyncio.run(comprobar_subredes_blacklist("185.220.101.0/18"))
+    respuesta = asyncio.run(comprobar_subredes_blacklist("1.1.1.0/22"))
     
     if respuesta is None:
         print("No se pudo completar el análisis")   
