@@ -7,6 +7,12 @@ from openpyxl.styles import PatternFill, Font
 
 from funcionalidades import validar
 from funcionalidades import consultar
+from netaddr import IPNetwork, IPSet, cidr_merge
+
+
+def juntar_bloques(lista_ips):
+    
+    return [str(res) for res in cidr_merge(lista_ips)]
 
 def generar_excel_reporte(reporte_maestro):
     nombre_archivo = f"reporte_prueba.xlsx"
@@ -22,8 +28,31 @@ def generar_excel_reporte(reporte_maestro):
                     todos_los_dominios.update(h["dominios"].split(", "))
     columnas_dnsbl = sorted(todos_los_dominios)
 
+
+    # Pestaña RESUMEN
+    ws_resumen = wb.active
+    ws_resumen.title = "Resultados generales"
+    ws_resumen.append(["Bloques", "Resultado"])
+    for cell in ws_resumen[1]:
+        cell.font = negrita
+
+    bloques_bloqueo = [s for s, d in reporte_maestro.items() if d["resultado"] == "BLOQUEO"]
+    bloques_limpio  = [s for s, d in reporte_maestro.items() if d["resultado"] == "LIMPIO"]
+    bloques_auditados = [s for s, d in reporte_maestro.items() if d["resultado"] == "AUDITORIA"]
+
+    for bloque in juntar_bloques(bloques_bloqueo):
+        ws_resumen.append([bloque, "BLOQUEO"])
+
+
+    for bloque in juntar_bloques(bloques_limpio):
+        ws_resumen.append([bloque, "LIMPIO"])
+
+    for bloque in juntar_bloques(bloques_auditados):
+        ws_resumen.append([bloque, "AUDITORIA"])
+    
+    
     # Pestaña BLOQUEO
-    ws_bloqueo = wb.active
+    ws_bloqueo = wb.create_sheet("BLOQUEO")
     ws_bloqueo.title = "BLOQUEO"
     ws_bloqueo.append(["Bloque", "Resultado"])
     for cell in ws_bloqueo[1]:
@@ -33,6 +62,7 @@ def generar_excel_reporte(reporte_maestro):
         if datos["resultado"] != "BLOQUEO":
             continue
         ws_bloqueo.append([segmento, "BLOQUEO"])
+
 
     # Pestaña LIMPIO
     ws_limpio = wb.create_sheet("LIMPIO")
@@ -45,7 +75,8 @@ def generar_excel_reporte(reporte_maestro):
             continue
         ws_limpio.append([segmento, "LIMPIO"])
 
-    # ── Pestaña AUDITORIA ─────────────────────────────────────────────────
+
+    # Pestaña AUDITORIA
     ws_auditoria = wb.create_sheet("AUDITORIA")
     encabezados_auditoria = ["Bloque", "IP's", "resultado"] + columnas_dnsbl
     ws_auditoria.append(encabezados_auditoria)
@@ -72,8 +103,9 @@ def generar_excel_reporte(reporte_maestro):
             fila = [segmento, h["ip"], "AUDITORIA"] + cols + [conteo]
             ws_auditoria.append(fila)
 
+
     wb.save(nombre_archivo)
-    print(f"✅ Reporte generado exitosamente: {nombre_archivo}")
+    print(f"Reporte generado exitosamente")
     return nombre_archivo
 
 def dividir_bloque(red, prefijo=24):
@@ -128,7 +160,8 @@ async def comprobar_subredes_blacklist(subredes):
         
 
 if __name__ == "__main__":
-    respuesta = asyncio.run(comprobar_subredes_blacklist("1.1.1.0/22"))
+    bloque = "200.67.0.0/20"
+    respuesta = asyncio.run(comprobar_subredes_blacklist(bloque))
     
     if respuesta is None:
         print("No se pudo completar el análisis")   
