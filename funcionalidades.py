@@ -168,7 +168,7 @@ async def analizar_bloques(bloque, loop, executor):
         }
 
     else:
-        # AUDITORIA — consultar todas las direcciones que no estaban en la muestra
+        # AUDITORIA
 
         print(f"{bloque} terminado")
         hallazgos = await consulta_exhaustiva(todas, loop, executor)
@@ -176,6 +176,7 @@ async def analizar_bloques(bloque, loop, executor):
         return {
             "bloque": str(bloque),
             "hallazgos": hallazgos,
+            "muestras": [],
             "resultado": "AUDITORIA",
         }
 
