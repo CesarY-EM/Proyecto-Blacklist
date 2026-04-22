@@ -1,28 +1,29 @@
 import asyncio
-import ipaddress
 
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font
 
-from funcionalidades import validar
-from funcionalidades import consultar
+from business.business import validar
+from business.business import consultar
 from netaddr import IPNetwork, IPSet, cidr_merge
 
 
 def juntar_bloques(lista_ips):
-    
     return [str(res) for res in cidr_merge(lista_ips)]
 
-def generar_excel_reporte(reporte_maestro):
 
+def generar_excel_reporte(reporte_maestro):
     fill_red = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
     bold_font = Font(bold=True)
 
-    nombre_archivo = f"reporte_prueba.xlsx"
+    nombre_archivo = f"reporte_prueba_v2.xlsx"
     
     wb = Workbook()
 
     negrita = Font(bold=True)
+    rojo    = PatternFill("solid", fgColor="FFB3B3")
+    verde   = PatternFill("solid", fgColor="B3FFB3")
+    naranja = PatternFill("solid", fgColor="FFD9B3")
 
     todos_los_dominios = set()
 
@@ -46,7 +47,6 @@ def generar_excel_reporte(reporte_maestro):
     # Pestaña RESUMEN
     ws_resumen = wb.active
     ws_resumen.title = "Resultados generales"
-  
     ws_resumen.append(["Bloques", "Resultado"])
 
     for cell in ws_resumen[1]:
@@ -70,12 +70,18 @@ def generar_excel_reporte(reporte_maestro):
 
         for bloque in juntar_bloques(bloques_bloqueo):
             ws_resumen.append([bloque, "BLOQUEO"])
+            for cell in ws_resumen[ws_resumen.max_row]:
+                cell.fill = rojo
 
         for bloque in juntar_bloques(bloques_limpio):
             ws_resumen.append([bloque, "LIMPIO"])
+            for cell in ws_resumen[ws_resumen.max_row]:
+                cell.fill = verde
 
         for bloque in juntar_bloques(bloques_auditados):
             ws_resumen.append([bloque, "AUDITORIA"])
+            for cell in ws_resumen[ws_resumen.max_row]:
+                cell.fill = naranja
 
         ws_resumen.append([])
         
@@ -143,21 +149,33 @@ def generar_excel_reporte(reporte_maestro):
                     else:
                         cols.append(0)
 
-                fila = [segmento, h.get("ip"), "AUDITORIA"] + cols + [conteo]
+                fila = [segmento, h.get("ip"), "AUDITORIA"] + cols
                 ws_auditoria.append(fila)
 
     wb.save(nombre_archivo)
     print(f"Reporte generado exitosamente")
     return nombre_archivo
 
-def dividir_bloque(red, prefijo=24):
+def dividir_bloque(red):
+    """
+    Funcion que divide el bloque orginial en sub-bloques
 
-    red = ipaddress.ip_network(red, strict=False)
+    Args:
+        string: Cadena que contiene el bloque original a dividir
 
-    if red.prefixlen >= prefijo:
-        return [red]
-
-    return list(red.subnets(new_prefix=prefijo))
+    Returns:
+        list: lista que contiene los subloques obtenidos
+    """
+    
+    if red.prefixlen > 24:
+        return red
+    if red.prefixlen >= 16:
+        return list(red.subnets(new_prefix=24))
+    elif red.prefixlen < 16 and red.prefixlen >= 11:
+        return list(red.subnets(new_prefix=16))
+    else: 
+        return ""
+        # mensaje de bloque demasiado grande
 
 
 async def comprobar_subredes_blacklist(subredes):
@@ -166,13 +184,11 @@ async def comprobar_subredes_blacklist(subredes):
     Funcion principal, es el "orquestador"
 
     Args:
-        string: Subredes a validar y sub dividir
+        string: redes a analizar
 
     Returns:
         string: None
     """
-
-
     resultados = {}
 
     respuesta = False
@@ -213,14 +229,9 @@ async def comprobar_subredes_blacklist(subredes):
 
 if __name__ == "__main__":
 
-    bloques = ["200.67.0.0/16", "192.168.1.0/16", "200.64.0.0/16"]
+    bloques = ["200.67.0.0/21"]
 
     respuesta = asyncio.run(comprobar_subredes_blacklist(bloques))
     
     if respuesta is None:
         print("No se pudo completar el análisis")  
-
-
-
-    """ 200.67.0.0
-    """
