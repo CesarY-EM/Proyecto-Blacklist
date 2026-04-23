@@ -4,28 +4,27 @@ import ipaddress
 import random
 import threading
 
-
+from constants import constantes
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import IPv4Network
 from netaddr import cidr_merge
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font
 from pydnsbl import DNSBLIpChecker
-from pydnsbl.providers import Provider, BASE_PROVIDERS
-from constants import constantes
+from pydnsbl.providers import BASE_PROVIDERS
 from models import models
-
 
 _local= threading.local()
 
 def juntar_bloques(lista_ips):
+
     return [str(res) for res in cidr_merge(lista_ips)]
 
-def generar_excel_reporte(reporte_maestro):
+def generar_excel_reporte(reporte_general):
     fill_red = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
     bold_font = Font(bold=True)
 
-    nombre_archivo = f"reporte_prueba_v2.xlsx"
+    nombre_archivo = f"reporte_prueba_2_bloques.xlsx"
     
     wb = Workbook()
 
@@ -36,7 +35,7 @@ def generar_excel_reporte(reporte_maestro):
 
     todos_los_dominios = set()
 
-    for datos in reporte_maestro.values():
+    for datos in reporte_general.values():
         for bloque in datos.get("bloques", {}).values():
 
             if bloque.get("resultado") != "AUDITORIA":
@@ -62,7 +61,7 @@ def generar_excel_reporte(reporte_maestro):
         cell.font = negrita
 
 
-    for red_original, contenido in reporte_maestro.items():
+    for red_original, contenido in reporte_general.items():
         row = ws_resumen.append([str(red_original).strip(), ""])
         last_row = ws_resumen.max_row
 
@@ -102,7 +101,7 @@ def generar_excel_reporte(reporte_maestro):
         cell.font = negrita
 
     
-    for segmento, datos in reporte_maestro.items():
+    for segmento, datos in reporte_general.items():
         for bloque, info in datos.get("bloques", {}).items():
             if info.get("resultado") != "BLOQUEO":
                 continue
@@ -115,7 +114,7 @@ def generar_excel_reporte(reporte_maestro):
     for cell in ws_limpio[1]:
         cell.font = negrita
 
-    for segmento, datos in reporte_maestro.items():
+    for segmento, datos in reporte_general.items():
         for bloque, info in datos.get("bloques", {}).items():
             if info.get("resultado") != "LIMPIO":
                 continue
@@ -130,7 +129,7 @@ def generar_excel_reporte(reporte_maestro):
     for cell in ws_auditoria[1]:
         cell.font = negrita
 
-    for segmento, datos in reporte_maestro.items():
+    for segmento, datos in reporte_general.items():
         for bloque, info in datos.get("bloques", {}).items():
 
             if info.get("resultado") != "AUDITORIA":
@@ -187,7 +186,6 @@ def dividir_bloque(red):
         return []
         # mensaje de bloque demasiado grande
 
-
 def validar(bloques):
 
     """
@@ -201,17 +199,12 @@ def validar(bloques):
     """
 
     validos = []
-    invalidos = []
 
     for bloque in bloques:
-        try:
-            red = IPv4Network(bloque.strip(), strict=False)
-            validos.append(red)
-        except ValueError as e:
-            invalidos.append({"bloque": bloque.strip(), "error": str(e)})
+        red = IPv4Network(bloque.strip(), strict=False)
+        validos.append(red)
 
     return validos
-
 
 def obtener_checker():
     
@@ -236,7 +229,6 @@ def verificar_ip(ip):
 
     try:
         checker = obtener_checker()
-        print(f"Analizando: {ip}...", end="\r")
         resultado = checker.check(ip)
 
         if resultado.blacklisted:
@@ -244,10 +236,11 @@ def verificar_ip(ip):
                 ", ".join(resultado.detected_by.keys()) if resultado.detected_by else ""
             )
             return {"ip": ip, "dominios": dominios}
+        
     except Exception as e:
         return None
 
-def evaluar(resultados_muestra, total_muestra):
+async def evaluar(resultados_muestra, total_muestra, bloque, loop, executor):
     
     """
     Funcion que evalua el resultado de las direcciones muestra
@@ -260,7 +253,6 @@ def evaluar(resultados_muestra, total_muestra):
     Returns:
         string: cadena que indica el resultado del porcentaje resultante
     """
-    
     positivos = [r for r in resultados_muestra if r is not None]
     conteo_positivos = len(positivos)
     
@@ -268,18 +260,35 @@ def evaluar(resultados_muestra, total_muestra):
     porcentaje = conteo_positivos / total_muestra
     
     if porcentaje >= constantes.UMBRAL:
-        veredicto = "BLOQUEO"
+        print(f"{bloque} terminado")
+        
+        return models.ResultadoBloque(
+            bloque = str(bloque),
+            resultado = "BLOQUEO"
+        )
         
     elif conteo_positivos == 0:
-        veredicto = "LIMPIO"
-    else:   
-        veredicto = "AUDITORIA"
+        print(f"{bloque} terminado")
+
+        return models.ResultadoBloque(
+            bloque = str(bloque),
+            resultado = "LIMPIO"
+        )
     
-    return models.EvaluacionMuestra(
-        resultado=veredicto,
-        porcentaje=porcentaje,
-        conteo=conteo_positivos
-    )
+    else:   
+        red = ipaddress.ip_network(bloque, strict=False)
+        todas = list(red.hosts())
+
+        print(f"{bloque} terminado")
+
+        hallazgos = await consulta_exhaustiva(todas, loop, executor)
+        hallazgos_verdaderos = [h for h in hallazgos if h is not None]
+
+        return models.ResultadoBloque(
+            bloque = str(bloque),
+            resultado = "AUDITORIA",
+            hallazgos = hallazgos_verdaderos
+        )
 
 async def consulta_exhaustiva(direcciones, loop, executor):
     """
@@ -301,7 +310,6 @@ async def consulta_exhaustiva(direcciones, loop, executor):
 
     resultados = await asyncio.gather(*consulta_completa)
     return resultados
-    
 
 def obtener_muestra(red):
     todas = list(red.hosts())
@@ -328,6 +336,8 @@ def obtener_muestra(red):
             direcciones_muestra = [primera] + centro_aleatorio + [ultima]
     else:
         direcciones_muestra = []
+
+
     return direcciones_muestra
 
 async def analizar_bloques(bloque, loop, executor):
@@ -336,49 +346,32 @@ async def analizar_bloques(bloque, loop, executor):
     Funcion que obtiene direcciones individuales de cada bloque y consulta muestreo
 
     Args:
-        string: cadena que contiene el bloque de donde se obtendran las direcciones individuales
+        string: cadena que contiene el bloque que se analizará
 
     Returns:
         string: resultado del metodo analizar_bloque
     """
-    
-    red = ipaddress.ip_network(bloque, strict=False)
-            
-    muestra = obtener_muestra(red) 
+    try:
+        red = ipaddress.ip_network(bloque, strict=False)
+                
+        muestra = obtener_muestra(red) 
 
-    verificar_muestra = [
-        loop.run_in_executor(executor, verificar_ip, str(ip)) for ip in muestra
-    ]
-    resultados_muestra = await asyncio.gather(*verificar_muestra)
-    evaluacion = evaluar(resultados_muestra, len(muestra))
-    
-    if evaluacion.resultado == "BLOQUEO":
-        print(f"{bloque} terminado")
+        muestreo = [
+            loop.run_in_executor(executor, verificar_ip, str(ip)) for ip in muestra
+        ]
+        resultados_muestra = await asyncio.gather(*muestreo)
+
+        resultado_analisis = await evaluar(resultados_muestra, len(muestra), bloque, loop, executor)
         
-        return models.ResultadoBloque(
-            bloque = str(bloque),
-            resultado = "BLOQUEO"
-    )
-
-    elif evaluacion.resultado == "LIMPIO":
-        print(f"{bloque} terminado")
-        return models.ResultadoBloque(
-            bloque = str(bloque),
-            resultado = "LIMPIO"
-        )
-
-    else:
-        # AUDITORIA
-        todas = list(red.hosts())
-        print(f"{bloque} terminado")
-        hallazgos = await consulta_exhaustiva(todas, loop, executor)
-        hallazgos_verdaderos = [h for h in hallazgos if h is not None]
+        return resultado_analisis
+    
+    except asyncio.TimeoutError:
+        print(f"Timeout de bloque: {bloque}")
         return models.ResultadoBloque(
             bloque = str(bloque),
             resultado = "AUDITORIA",
-            hallazgos = hallazgos_verdaderos
+            hallazgos = []
         )
-
 
 async def consultar(bloques):
     """
@@ -397,7 +390,7 @@ async def consultar(bloques):
         print(">>> Iniciando análisis asíncrono...")
 
         tareas = [analizar_bloques(b, loop, executor) for b in bloques]
-        resultados = await asyncio.gather(*tareas)
+        resultados = await  asyncio.wait_for( asyncio.gather(*tareas), timeout = 300)
         
         reporte = {}
                 
@@ -409,19 +402,21 @@ async def consultar(bloques):
                 "resultado": datos.resultado
             }
     
+        print("Bloques terminados")
         return reporte
     
     finally:
-        print(">>> Finalizando hilos de trabajo...")
+        print("Finalizando hilos")
         try:
             await loop.run_in_executor(None, executor.shutdown, True)
+            print("Hilos finalizados")
         except (ValueError, RuntimeError):
-            pass
+            print (Exception)
 
 async def comprobar_subredes_blacklist(subredes):
 
     """
-    Funcion principal, es el "orquestador"
+    Funcion principal, verifica parametros iniciales
 
     Args:
         string: redes a analizar
@@ -429,6 +424,7 @@ async def comprobar_subredes_blacklist(subredes):
     Returns:
         string: None
     """
+
     resultados = {}
 
     respuesta = False
@@ -437,8 +433,6 @@ async def comprobar_subredes_blacklist(subredes):
     if not validos:
         print("error: Direcciones no validas")
         return
-
-    
 
     for red in validos:
         bloques = [str(b) for b in dividir_bloque(red)]
@@ -465,4 +459,4 @@ async def comprobar_subredes_blacklist(subredes):
     print("Generando reporte final")
     generar_excel_reporte(resultados)
         
-    return respuesta
+    return resultados

@@ -1,8 +1,6 @@
 from pydnsbl.providers import Provider
 
-
-MAX_WORKERS = 50
-TIMEOUT = 2
+MAX_WORKERS = 20
 UMBRAL = 0.8
 
 MUESTRA_24 = 25

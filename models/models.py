@@ -9,8 +9,3 @@ class ResultadoBloque(BaseModel):
 
     class Config:
         from_attributes=True
-        
-class EvaluacionMuestra(BaseModel):
-    resultado: str 
-    porcentaje: float
-    conteo: int
