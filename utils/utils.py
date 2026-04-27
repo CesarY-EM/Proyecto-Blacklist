@@ -10,7 +10,7 @@ _local= threading.local()
 def obtener_checker():
     
     if not hasattr(_local, "checker"):
-        dominios = BASE_PROVIDERS + constantes.PROVIDERS        
+        dominios = constantes.PROVIDERS        
         _local.checker = DNSBLIpChecker(providers=dominios, timeout=2)
     return _local.checker
 

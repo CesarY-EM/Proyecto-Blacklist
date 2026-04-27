@@ -2,27 +2,34 @@ import asyncio
 import sys
 import json
 
+sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
+from loggingConfig import LoggerFileConfig
+from constantesPlugins import LOG_CONFIG_FILES
+logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
+
+
 from business import business
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        logging.info("No se recibieron direcciones ")
 
-    bloques = ["200.67.0.0/19"]
-    print("iniciando consulta")
-    respuesta = asyncio.run(business.iniciar_blacklist(bloques))
-    if respuesta is None:
-        print("No se pudo completar el análisis")
+    else:
+        bloques = sys.argv[1:]
+        logging.info("Argumentos recibidos:"+ str(bloques))
+
+        respuesta_consulta_subredes = asyncio.run(business.iniciar_blacklist(bloques))
+        if respuesta_consulta_subredes:
+            json_string = json.dumps(respuesta_consulta_subredes, indent=4)
+            print(json_string)
 
 
 """
-    if len(sys.argv) < 2:
-    #logging.info("No se recibieron direcciones ")
-    print("No se recibieron direcciones ")
-    else:
-    bloques = sys.argv[1:]
-    #logging.info("Argumentos recibidos:"+ str(lista_direcciones))
 
-    respuesta_validacion_subredes = respuesta = asyncio.run(comprobar_subredes_blacklist(bloques))
-    if respuesta_validacion_subredes:
-        json_string = json.dumps(respuesta_validacion_subredes, indent=4)
-        print(json_string)
-    """
+
+    bloques = ["200.67.0.0/20", "192.168.1.0/21"]
+        print("iniciando consulta")
+        respuesta = asyncio.run(business.iniciar_blacklist(bloques))
+        if respuesta is None:
+            print("No se pudo completar el análisis")    
+"""

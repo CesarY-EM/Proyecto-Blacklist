@@ -5,6 +5,13 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import IPv4Network
 
+
+sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
+from loggingConfig import LoggerFileConfig
+from constantesPlugins import LOG_CONFIG_FILES
+logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
+
+
 from business import creacion_archivo
 from constants import constantes
 from utils import utils
@@ -86,7 +93,6 @@ async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executo
     positivos = [r for r in resultados_muestra if r is not None]
     conteo_positivos = len(positivos)
     
-
     porcentaje = conteo_positivos / len(muestra)
     
     if porcentaje >= constantes.UMBRAL:
@@ -164,9 +170,10 @@ async def procesar_sub_bloques(sub_bloques):
     loop = asyncio.get_running_loop() 
     executor = ThreadPoolExecutor(max_workers = constantes.MAX_WORKERS)
     try:
-        print("Iniciando análisis")
-
+      
+        logging.info(f"Iniciando analisis de sub-bloques")
         tareas = [analizar_sub_bloques(sub_bloque, loop, executor) for sub_bloque in sub_bloques]
+
         resultados = await  asyncio.wait_for( asyncio.gather(*tareas), timeout = 300)
         
         reporte = {}
@@ -230,12 +237,13 @@ async def iniciar_blacklist(bloques):
 
     for bloque in bloques:
         sub_bloques = [str(sub_bloque) for sub_bloque in dividir_bloque(bloque)]
+        logging.info(f"Divison de {bloque} exitoso")
 
-        print("sub-bloques obtenidos:")
         for sub_bloque in sub_bloques:
             print(f"{sub_bloque}")
             
         try:
+
             respuesta = await procesar_sub_bloques(sub_bloques)
             
         except Exception as e:
@@ -250,7 +258,7 @@ async def iniciar_blacklist(bloques):
         "bloques": respuesta
         }
         
-    print("Generando reporte final")
+    
     creacion_archivo.generar_reporte(resultados)
         
     return resultados
