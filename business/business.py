@@ -1,6 +1,7 @@
 import asyncio
 import ipaddress
 import random
+import sys
 
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import IPv4Network
@@ -30,7 +31,6 @@ async def consulta_exhaustiva(direcciones, loop, executor):
     Returns:
         dict: diccionario que contiene la ip y los dominios donde se encontro
     """
-    print("Iniciando analisis completo")
     consulta_completa = [
         loop.run_in_executor(executor, utils.consultar_dominios, str(direccion)) for direccion in direcciones
     ]
@@ -96,7 +96,6 @@ async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executo
     porcentaje = conteo_positivos / len(muestra)
     
     if porcentaje >= constantes.UMBRAL:
-        print(f"{sub_bloque} terminado con resultado de: BLOQUEO")
         
         return models.ResultadoBloque(
             bloque = str(sub_bloque),
@@ -104,7 +103,6 @@ async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executo
         )
         
     elif conteo_positivos == 0:
-        print(f"{sub_bloque} terminado con resultado de: LIMPIO")
 
         return models.ResultadoBloque(
             bloque = str(sub_bloque),
@@ -119,11 +117,8 @@ async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executo
         muestra_set = {str(ip) for ip in muestra}  # necesitas pasar muestra como parámetro
         restantes = [ip for ip in todas if str(ip) not in muestra_set]
 
-        print(f"{sub_bloque} terminado con resultado de: AUDITORIA")
         hallazgos = await consulta_exhaustiva(restantes, loop, executor)
-        
-        print(f"Resultados obtenidos de: {red}" )
-        
+                
         hallazgos_verdaderos = [h for h in hallazgos if h is not None]
 
         return models.ResultadoBloque(
@@ -186,14 +181,13 @@ async def procesar_sub_bloques(sub_bloques):
                 "resultado": datos.resultado
             }
     
-        print("sub_bloques terminados")
+        logging.info(f"Analisis de sub-bloques terminado")
         return reporte
     
     finally:
-        print("Finalizando hilos")
+
         try:
             await loop.run_in_executor(None, executor.shutdown, True)
-            print("Hilos finalizados")
         except (ValueError, RuntimeError):
             print (Exception)
 
@@ -238,9 +232,6 @@ async def iniciar_blacklist(bloques):
     for bloque in bloques:
         sub_bloques = [str(sub_bloque) for sub_bloque in dividir_bloque(bloque)]
         logging.info(f"Divison de {bloque} exitoso")
-
-        for sub_bloque in sub_bloques:
-            print(f"{sub_bloque}")
             
         try:
 
@@ -258,7 +249,6 @@ async def iniciar_blacklist(bloques):
         "bloques": respuesta
         }
         
-    
-    creacion_archivo.generar_reporte(resultados)
-        
-    return resultados
+    respuesta = creacion_archivo.generar_reporte(resultados)
+
+    return respuesta

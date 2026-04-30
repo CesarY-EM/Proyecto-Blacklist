@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import os
 import json
 
 sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
@@ -12,7 +13,7 @@ from business import business
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        logging.info("No se recibieron direcciones ")
+        logging.info("No se recibieron direcciones")
 
     else:
         bloques = sys.argv[1:]
@@ -20,13 +21,12 @@ if __name__ == "__main__":
 
         respuesta_consulta_subredes = asyncio.run(business.iniciar_blacklist(bloques))
         if respuesta_consulta_subredes:
-            json_string = json.dumps(respuesta_consulta_subredes, indent=4)
-            print(json_string)
+            logging.info("Proceso concluido")
+            print (os.path.abspath(respuesta_consulta_subredes))
+
 
 
 """
-
-
     bloques = ["200.67.0.0/20", "192.168.1.0/21"]
         print("iniciando consulta")
         respuesta = asyncio.run(business.iniciar_blacklist(bloques))
