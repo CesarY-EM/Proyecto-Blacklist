@@ -5,6 +5,8 @@ import sys
 
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import IPv4Network
+from pymongo import MongoClient
+from datetime import datetime
 
 
 sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
@@ -13,10 +15,68 @@ from constantesPlugins import LOG_CONFIG_FILES
 logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
 
-from business import creacion_archivo
 from constants import constantes
 from utils import utils
 from models import models
+
+
+
+def guardar_en_mongo(resultados):
+    """
+    Guarda los resultados del análisis en MongoDB.
+
+    Estructura del documento guardado:
+    {
+        "fecha": "2026-05-13 10:00:00",
+        "bloques": {
+            "200.67.0.0/16": {
+                "bloques": {
+                    "200.67.0.0/24": {
+                        "resultado": "LIMPIO",
+                        "ips": []
+                    },
+                    "200.67.1.0/24": {
+                        "resultado": "BLOQUEO",
+                        "ips": [{"ip": "200.67.1.5", "dominios": "zen.spamhaus.org"}]
+                    },
+                    "200.67.2.0/24": {
+                        "resultado": "AUDITORIA",
+                        "ips": [{"ip": "200.67.2.10", "dominios": "bl.spamcop.net"}]
+                    }
+                }
+            }
+        }
+    }
+
+    Args:
+        dict: resultados generados por iniciar_blacklist
+
+    Returns:
+        None
+    """
+    cliente = None
+    try:
+        cliente = MongoClient("mongodb://localhost:27017") #mongodb://admin:gsoppower@201.154.139.4:8445
+        db = cliente["blacklistDB"]
+        coleccion = db["reportes"]
+
+        documento = {
+            "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "bloques": resultados
+        }
+
+        coleccion.insert_one(documento)
+
+        logging.info("Resultados guardados en MongoDB correctamente")
+
+    except Exception as e:
+        logging.error(f"Error al guardar en MongoDB: {e}")
+
+    finally:
+        if cliente:
+            cliente.close()
+
+
 
 async def consulta_exhaustiva(direcciones, loop, executor):
     """
@@ -26,7 +86,7 @@ async def consulta_exhaustiva(direcciones, loop, executor):
         list: lista donde contiene las direcciones de un bloque a analizar
         loop: administrador de tareas que organiza el tráfico de red
         executor: grupo de hilos de apoyo
-        
+
 
     Returns:
         dict: diccionario que contiene la ip y los dominios donde se encontro
@@ -36,8 +96,8 @@ async def consulta_exhaustiva(direcciones, loop, executor):
     ]
 
     resultados = await asyncio.gather(*consulta_completa)
-    
-    
+
+
     return resultados
 
 def obtener_muestra(sub_bloque):
@@ -45,10 +105,10 @@ def obtener_muestra(sub_bloque):
     Funcion donde obtenemos muestra en base al prefijo del sub_bloque
 
     Args:
-        string: Cadena que contiene el sub bloque 
+        string: Cadena que contiene el sub bloque
 
     Returns:
-        list: lista donde se encuentran las direcciones muestra obtenidas 
+        list: lista donde se encuentran las direcciones muestra obtenidas
     """
     todas = list(sub_bloque.hosts())
     direcciones_muestra = []
@@ -69,7 +129,7 @@ def obtener_muestra(sub_bloque):
             ultima = todas[-1]
 
             centro = todas[1:-1]
-            
+
             centro_aleatorio = random.sample(centro, objetivo - 2)
             direcciones_muestra = [primera] + centro_aleatorio + [ultima]
     else:
@@ -78,47 +138,47 @@ def obtener_muestra(sub_bloque):
     return direcciones_muestra
 
 async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executor):
-    
+
     """
     Funcion que evalua el resultado de las direcciones muestra
 
     Args:
         list: lista de las direcciones con hallazgos
         int: Numero del total de las direcciones muestra que se analizaron
-        
+
 
     Returns:
         string: cadena que indica el resultado del porcentaje resultante
     """
     positivos = [r for r in resultados_muestra if r is not None]
     conteo_positivos = len(positivos)
-    
+
     porcentaje = conteo_positivos / len(muestra)
-    
+
     if porcentaje >= constantes.UMBRAL:
-        
+
         return models.ResultadoBloque(
             bloque = str(sub_bloque),
             resultado = "BLOQUEO"
         )
-        
+
     elif conteo_positivos == 0:
 
         return models.ResultadoBloque(
             bloque = str(sub_bloque),
             resultado = "LIMPIO"
         )
-    
-    else:   
+
+    else:
         red = ipaddress.ip_network(sub_bloque, strict=False)
         todas = list(red.hosts())
-        
+
         # Excluir IPs ya consultadas en la muestra
         muestra_set = {str(ip) for ip in muestra}  # necesitas pasar muestra como parámetro
         restantes = [ip for ip in todas if str(ip) not in muestra_set]
 
         hallazgos = await consulta_exhaustiva(restantes, loop, executor)
-                
+
         hallazgos_verdaderos = [h for h in hallazgos if h is not None]
 
         return models.ResultadoBloque(
@@ -139,8 +199,8 @@ async def analizar_sub_bloques(sub_bloque, loop, executor):
     """
 
     sub_bloque_base = ipaddress.ip_network(sub_bloque, strict=False)
-            
-    muestra = obtener_muestra(sub_bloque_base) 
+
+    muestra = obtener_muestra(sub_bloque_base)
 
     muestreo = [
         loop.run_in_executor(executor, utils.consultar_dominios, str(ip)) for ip in muestra
@@ -148,7 +208,7 @@ async def analizar_sub_bloques(sub_bloque, loop, executor):
     resultados_muestra = await asyncio.gather(*muestreo)
 
     resultado_analisis = await evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executor)
-    
+
     return resultado_analisis
 
 async def procesar_sub_bloques(sub_bloques):
@@ -161,29 +221,29 @@ async def procesar_sub_bloques(sub_bloques):
     Returns:
         dict: Diccionario con resultados del analisis de los sub-bloques
     """
-    
-    loop = asyncio.get_running_loop() 
+
+    loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers = constantes.MAX_WORKERS)
     try:
-      
+
         logging.info(f"Iniciando analisis de sub-bloques")
         tareas = [analizar_sub_bloques(sub_bloque, loop, executor) for sub_bloque in sub_bloques]
 
         resultados = await  asyncio.wait_for( asyncio.gather(*tareas), timeout = 300)
-        
+
         reporte = {}
-                
+
         for datos in resultados:
             bloque = datos.bloque
-            
+
             reporte[bloque] = {
                 "ips": datos.hallazgos,
                 "resultado": datos.resultado
             }
-    
+
         logging.info(f"Analisis de sub-bloques terminado")
         return reporte
-    
+
     finally:
 
         try:
@@ -202,8 +262,8 @@ def dividir_bloque(bloque):
         list: lista que contiene los subloques obtenidos
     """
     bloque_base = ipaddress.ip_network(bloque, strict = False)
-    
-    
+
+
     if bloque_base.prefixlen > 24: #Bloque mayor /24
         return list[bloque_base]
     if bloque_base.prefixlen >= 16:
@@ -232,23 +292,23 @@ async def iniciar_blacklist(bloques):
     for bloque in bloques:
         sub_bloques = [str(sub_bloque) for sub_bloque in dividir_bloque(bloque)]
         logging.info(f"Divison de {bloque} exitoso")
-            
+
         try:
 
             respuesta = await procesar_sub_bloques(sub_bloques)
-            
+
         except Exception as e:
             print(f"error:Error consultar -  {e}")
             return None
-        
+
         if respuesta is None:
             print("error: consultar no devolvio resultados")
             return None
-        
+
         resultados[str(bloque)] = {
         "bloques": respuesta
         }
-        
-    respuesta = creacion_archivo.generar_reporte(resultados)
 
-    return respuesta
+    guardar_en_mongo(resultados)
+
+    return "Resultados guardados"
