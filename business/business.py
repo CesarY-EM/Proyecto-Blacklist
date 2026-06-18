@@ -1,24 +1,19 @@
 import asyncio
 import ipaddress
-import random
 import sys
 
 from concurrent.futures import ThreadPoolExecutor
-from ipaddress import IPv4Network
 from pymongo import MongoClient
 from datetime import datetime
-
 
 sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
 from loggingConfig import LoggerFileConfig
 from constantesPlugins import LOG_CONFIG_FILES
 logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
-
 from constants import constantes
 from utils import utils
 from models import models
-
 
 
 def guardar_en_mongo(resultados):
@@ -56,7 +51,7 @@ def guardar_en_mongo(resultados):
     """
     cliente = None
     try:
-        cliente = MongoClient("mongodb://localhost:27017") #mongodb://admin:gsoppower@201.154.139.4:8445
+        cliente = MongoClient("mongodb://admin:gsoppower@201.154.139.4:8445")
         db = cliente["blacklistDB"]
         coleccion = db["reportes"]
 
@@ -78,237 +73,332 @@ def guardar_en_mongo(resultados):
 
 
 
-async def consulta_exhaustiva(direcciones, loop, executor):
-    """
-    Funcion que evalua todas las direcciones de un bloque
-
-    Args:
-        list: lista donde contiene las direcciones de un bloque a analizar
-        loop: administrador de tareas que organiza el tráfico de red
-        executor: grupo de hilos de apoyo
-
-
-    Returns:
-        dict: diccionario que contiene la ip y los dominios donde se encontro
-    """
-    consulta_completa = [
-        loop.run_in_executor(executor, utils.consultar_dominios, str(direccion)) for direccion in direcciones
-    ]
-
-    resultados = await asyncio.gather(*consulta_completa)
-
-
-    return resultados
-
 def obtener_muestra(sub_bloque):
     """
-    Funcion donde obtenemos muestra en base al prefijo del sub_bloque
+    Obtiene muestra de IPs según el prefijo del bloque.
+
+    RN-05: /29 a /32 → todas las IPs utilizables
+    RN-04: /24 a /28 → 4 IPs en posiciones fijas
 
     Args:
-        string: Cadena que contiene el sub bloque
+        sub_bloque: objeto IPv4Network
 
     Returns:
-        list: lista donde se encuentran las direcciones muestra obtenidas
+        list: lista de IPs a analizar
     """
-    todas = list(sub_bloque.hosts())
-    direcciones_muestra = []
 
-    # Determinamos el tamaño de la muestra según el prefijo
-    if sub_bloque.prefixlen == 24:
-        objetivo = constantes.MUESTRA_24
-    elif sub_bloque.prefixlen == 16:
-        objetivo = constantes.MUESTRA_16
-    else:
-        objetivo = 5
+    prefijo = sub_bloque.prefixlen
 
-    if objetivo > 0:
-        if len(todas) <= objetivo:
-            direcciones_muestra = todas[:]
-        else:
-            primera = todas[0]
-            ultima = todas[-1]
+    # RN-05: /29 a /32 → todas las IPs
+    if 29 <= prefijo <= 32:
+        return list(sub_bloque.hosts())
 
-            centro = todas[1:-1]
+    # RN-04: /24 a /28 → 4 IPs de muestra
+    if 24 <= prefijo <= 28:
 
-            centro_aleatorio = random.sample(centro, objetivo - 2)
-            direcciones_muestra = [primera] + centro_aleatorio + [ultima]
-    else:
-        direcciones_muestra = []
+        hosts = list(sub_bloque.hosts())
 
-    return direcciones_muestra
+        if len(hosts) <= 4:
+            return hosts
 
-async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executor):
+       
+        if prefijo == 24:
+            offsets = [32, 96, 160, 224]
+            muestra = []
+            for offset in offsets:
+                ip = sub_bloque.network_address + offset
+                if ip in sub_bloque and ip != sub_bloque.broadcast_address:
+                    muestra.append(ip)
+            return muestra
 
+        # Para /25 a /28: 4 posiciones proporcionales
+        posiciones = [
+            len(hosts) // 5,
+            (len(hosts) * 2) // 5,
+            (len(hosts) * 3) // 5,
+            (len(hosts) * 4) // 5
+        ]
+        return [hosts[pos] for pos in posiciones]
+
+    return []
+
+
+
+async def analizar_por_fases(sub_bloque, loop, executor):
     """
-    Funcion que evalua el resultado de las direcciones muestra
+    Análisis por fases para bloques /24 (provenientes de /16 a /23).
+
+    Fase 1: 4 IPs  → LIMPIO si no hay hallazgos
+    Fase 2: 10 IPs → AUDITORIA si no hay hallazgos en fase 2
+    Fase 3: 11 IPs → BLOQUEO si hay hallazgos, AUDITORIA si no
 
     Args:
-        list: lista de las direcciones con hallazgos
-        int: Numero del total de las direcciones muestra que se analizaron
-
+        sub_bloque: string con el bloque CIDR
+        loop:       event loop de asyncio
+        executor:   ThreadPoolExecutor
 
     Returns:
-        string: cadena que indica el resultado del porcentaje resultante
+        ResultadoBloque
     """
-    positivos = [r for r in resultados_muestra if r is not None]
-    conteo_positivos = len(positivos)
 
-    porcentaje = conteo_positivos / len(muestra)
+    red   = ipaddress.ip_network(sub_bloque, strict=False)
+    hosts = list(red.hosts())
 
-    if porcentaje >= constantes.UMBRAL:
+    # FASE 1: 4 IPs 
+    fase1 = obtener_muestra(red)
 
+    tareas = [
+        loop.run_in_executor(executor, utils.consultar_dominios, str(ip))
+        for ip in fase1
+    ]
+    resultados1 = await asyncio.gather(*tareas)
+    hallazgos1  = [r for r in resultados1 if r is not None]
+
+    if not hallazgos1:
         return models.ResultadoBloque(
-            bloque = str(sub_bloque),
-            resultado = "BLOQUEO"
+            bloque=str(sub_bloque),
+            resultado="LIMPIO"
         )
 
-    elif conteo_positivos == 0:
+    # FASE 2: 10 IPs más
+    fase1_set  = set(fase1)
+    restantes  = [ip for ip in hosts if ip not in fase1_set]
+    fase2      = restantes[:10]
 
-        return models.ResultadoBloque(
-            bloque = str(sub_bloque),
-            resultado = "LIMPIO"
-        )
+    tareas = [
+        loop.run_in_executor(executor, utils.consultar_dominios, str(ip))
+        for ip in fase2
+    ]
+    resultados2 = await asyncio.gather(*tareas)
+    hallazgos2  = [r for r in resultados2 if r is not None]
 
-    else:
-        red = ipaddress.ip_network(sub_bloque, strict=False)
-        todas = list(red.hosts())
-
-        # Excluir IPs ya consultadas en la muestra
-        muestra_set = {str(ip) for ip in muestra}  # necesitas pasar muestra como parámetro
-        restantes = [ip for ip in todas if str(ip) not in muestra_set]
-
-        hallazgos = await consulta_exhaustiva(restantes, loop, executor)
-
-        hallazgos_verdaderos = [h for h in hallazgos if h is not None]
-
+    if not hallazgos2:
         return models.ResultadoBloque(
             bloque=str(sub_bloque),
             resultado="AUDITORIA",
-            hallazgos=hallazgos_verdaderos
+            hallazgos=hallazgos1
         )
 
-async def analizar_sub_bloques(sub_bloque, loop, executor):
+    #FASE 3: 11 IPs más 
+    fase2_set  = set(fase2)
+    restantes  = [ip for ip in restantes if ip not in fase2_set]
+    fase3      = restantes[:11]
+
+    tareas = [
+        loop.run_in_executor(executor, utils.consultar_dominios, str(ip))
+        for ip in fase3
+    ]
+    resultados3 = await asyncio.gather(*tareas)
+    hallazgos3  = [r for r in resultados3 if r is not None]
+
+    todos_hallazgos = hallazgos1 + hallazgos2 + hallazgos3
+
+    if hallazgos3:
+        return models.ResultadoBloque(
+            bloque=str(sub_bloque),
+            resultado="BLOQUEO",
+            hallazgos=todos_hallazgos
+        )
+
+    return models.ResultadoBloque(
+        bloque=str(sub_bloque),
+        resultado="AUDITORIA",
+        hallazgos=todos_hallazgos
+    )
+
+
+
+
+async def evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executor):
     """
-    Funcion que obtiene direcciones individuales de cada bloque y consulta muestreo
+    Evalúa resultado de muestra para bloques /24 a /32.
+
+    Sin hallazgos → LIMPIO
+    Con hallazgos → AUDITORIA
 
     Args:
-        string: cadena que contiene el bloque que se analizará
+        resultados_muestra: resultados de la consulta
+        muestra:            IPs consultadas
+        sub_bloque:         bloque analizado
+        loop:               event loop
+        executor:           ThreadPoolExecutor
 
     Returns:
-        string: resultado del metodo analizar_bloque
+        ResultadoBloque
+    """
+
+    hallazgos = [r for r in resultados_muestra if r is not None]
+
+    if len(hallazgos) == 0:
+        return models.ResultadoBloque(
+            bloque=str(sub_bloque),
+            resultado="LIMPIO"
+        )
+
+    return models.ResultadoBloque(
+        bloque=str(sub_bloque),
+        resultado="AUDITORIA",
+        hallazgos=hallazgos
+    )
+
+
+
+
+async def analizar_sub_bloques(sub_bloque, loop, executor, analisis_fases):
+    """
+    Analiza un sub-bloque según su tipo.
+
+    analisis_fases=True  → RN-06 (bloques /24 provenientes de /16-/23)
+    analisis_fases=False → RN-04/RN-05 (bloques /24 a /32 directos)
+
+    Args:
+        sub_bloque:     string con el bloque CIDR
+        loop:           event loop
+        executor:       ThreadPoolExecutor
+        analisis_fases: bool
+
+    Returns:
+        ResultadoBloque
     """
 
     sub_bloque_base = ipaddress.ip_network(sub_bloque, strict=False)
 
+    # RN-06: análisis por fases
+    if analisis_fases:
+        return await analizar_por_fases(sub_bloque, loop, executor)
+
+    # RN-04 y RN-05: muestreo simple
     muestra = obtener_muestra(sub_bloque_base)
 
     muestreo = [
-        loop.run_in_executor(executor, utils.consultar_dominios, str(ip)) for ip in muestra
+        loop.run_in_executor(executor, utils.consultar_dominios, str(ip))
+        for ip in muestra
     ]
     resultados_muestra = await asyncio.gather(*muestreo)
 
-    resultado_analisis = await evaluar_muestra(resultados_muestra, muestra, sub_bloque, loop, executor)
+    return await evaluar_muestra(
+        resultados_muestra,
+        muestra,
+        sub_bloque,
+        loop,
+        executor
+    )
 
-    return resultado_analisis
+
 
 async def procesar_sub_bloques(sub_bloques):
     """
-    Funcion que orquesta el analisis de los sub-bloques
+    Orquesta el análisis paralelo de todos los sub-bloques.
 
     Args:
-        lista: Lista con los sub-bloques a analizar
+        sub_bloques: lista de tuplas (sub_bloque, analisis_fases)
 
     Returns:
-        dict: Diccionario con resultados del analisis de los sub-bloques
+        dict: { sub_bloque: { "ips": [...], "resultado": "..." } }
     """
 
-    loop = asyncio.get_running_loop()
-    executor = ThreadPoolExecutor(max_workers = constantes.MAX_WORKERS)
+    loop     = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=constantes.MAX_WORKERS)
+
     try:
+        logging.info("Iniciando análisis de sub-bloques")
 
-        logging.info(f"Iniciando analisis de sub-bloques")
-        tareas = [analizar_sub_bloques(sub_bloque, loop, executor) for sub_bloque in sub_bloques]
+        tareas = [
+            analizar_sub_bloques(sub_bloque, loop, executor, analisis_fases)
+            for sub_bloque, analisis_fases in sub_bloques
+        ]
 
-        resultados = await  asyncio.wait_for( asyncio.gather(*tareas), timeout = 300)
+        resultados = await asyncio.wait_for(
+            asyncio.gather(*tareas),
+            timeout=300
+        )
 
         reporte = {}
-
         for datos in resultados:
-            bloque = datos.bloque
-
-            reporte[bloque] = {
-                "ips": datos.hallazgos,
+            reporte[datos.bloque] = {
+                "ips":       datos.hallazgos,
                 "resultado": datos.resultado
             }
 
-        logging.info(f"Analisis de sub-bloques terminado")
+        logging.info("Análisis de sub-bloques terminado")
         return reporte
 
     finally:
-
         try:
             await loop.run_in_executor(None, executor.shutdown, True)
-        except (ValueError, RuntimeError):
-            print (Exception)
+        except (ValueError, RuntimeError) as e:
+            logging.error(f"Error cerrando executor: {e}")
+
+
 
 def dividir_bloque(bloque):
     """
-    Funcion que divide el bloque original en sub-bloques
-
-    Args:
-        string: Cadena que contiene el bloque original a dividir
+    Divide el bloque en sub-bloques y determina el tipo de análisis.
 
     Returns:
-        list: lista que contiene los subloques obtenidos
+        list de tuplas: [(sub_bloque_str, analisis_fases), ...]
+
+    Raises:
+        ValueError: si el prefijo es menor a /16 (RN-07)
     """
-    bloque_base = ipaddress.ip_network(bloque, strict = False)
 
+    bloque_base = ipaddress.ip_network(bloque, strict=False)
+    prefijo     = bloque_base.prefixlen
 
-    if bloque_base.prefixlen > 24: #Bloque mayor /24
-        return list[bloque_base]
-    if bloque_base.prefixlen >= 16:
-        return list(bloque_base.subnets(new_prefix = constantes.PREFIJO_24))
-    elif bloque_base.prefixlen < 16 and bloque_base.prefixlen >= 11:
-        return list(bloque_base.subnets(new_prefix=constantes.PREFIJO_16))
-    else: #Bloque demasiado grande
-        return []
+    # RN-07: rechazar /12 a /15 y menores
+    if prefijo < 16:
+        raise ValueError(f"Segmento no soportado: /{prefijo}. Solo se aceptan /16 a /32")
+
+    # RN-06: /16 a /23 → subdividir en /24, análisis por fases
+    if 16 <= prefijo <= 23:
+        return [
+            (str(sub), True)
+            for sub in bloque_base.subnets(new_prefix=24)
+        ]
+
+    # RN-04: /24 a /28 → análisis simple con 4 IPs
+    # RN-05: /29 a /32 → todas las IPs
+    return [(str(bloque_base), False)]
+
 
 async def iniciar_blacklist(bloques):
-
     """
-    Funcion principal, obtiene bloques y obtiene sus sub-bloques
+    Función principal. Recibe los bloques, los divide y lanza el análisis.
 
     Args:
-        string: redes a analizar
+        bloques: lista de strings con bloques en formato CIDR
 
     Returns:
-        string: None
+        dict: resultados del análisis por bloque
     """
 
     resultados = {}
 
-    respuesta = False
-
     for bloque in bloques:
-        sub_bloques = [str(sub_bloque) for sub_bloque in dividir_bloque(bloque)]
-        logging.info(f"Divison de {bloque} exitoso")
 
         try:
+            sub_bloques = dividir_bloque(bloque)
+
+            logging.info(f"División de {bloque} exitosa — {len(sub_bloques)} sub-bloques")
 
             respuesta = await procesar_sub_bloques(sub_bloques)
 
+            if respuesta is None:
+                logging.error(f"No hubo respuesta para {bloque}")
+                continue
+
+            resultados[str(bloque)] = {
+                "bloques": respuesta
+            }
+
+        except ValueError as e:
+            logging.error(f"Bloque rechazado {bloque}: {e}")
+            resultados[str(bloque)] = {"error": str(e)}
+
         except Exception as e:
-            print(f"error:Error consultar -  {e}")
-            return None
-
-        if respuesta is None:
-            print("error: consultar no devolvio resultados")
-            return None
-
-        resultados[str(bloque)] = {
-        "bloques": respuesta
-        }
+            logging.error(f"Error procesando {bloque}: {e}")
+            resultados[str(bloque)] = {"error": str(e)}
 
     guardar_en_mongo(resultados)
 
-    return "Resultados guardados"
+    return resultados
