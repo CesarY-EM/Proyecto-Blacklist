@@ -10,13 +10,18 @@ _local= threading.local()
 def obtener_checker():
     
     if not hasattr(_local, "checker"):
+<<<<<<< HEAD
         dominios = constantes.PROVIDERS        
         _local.checker = DNSBLIpChecker(providers=dominios, timeout=2)
+=======
+        proveedores = constantes.PROVIDERS
+        _local.checker = DNSBLIpChecker(providers=proveedores, timeout=2)
+>>>>>>> 26edf28 (Mejoras de legibilidad)
     return _local.checker
 
-def consultar_dominios(direccion):
+def consultar_ip_en_blacklist(direccion):
     """
-    Funcion que verifica si direccion ingresada se encuentra en listas nehras
+    Funcion que verifica si direccion ingresada se encuentra en listas negras
 
     Args:
         string: ip a verificar
