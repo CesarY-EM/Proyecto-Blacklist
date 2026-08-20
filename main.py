@@ -8,12 +8,9 @@ from loggingConfig import LoggerFileConfig
 from constantesPlugins import LOG_CONFIG_FILES
 logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
-<<<<<<< HEAD
-=======
 sys.path.append("/home/ngsop/lilaApp/core")
 from db.connectionDB import mongoConnection
 from utilidades.constantes import MONGO_DEFAULT_LILA
->>>>>>> 26edf28 (Mejoras de legibilidad)
 
 from business import business
 
@@ -120,24 +117,4 @@ if __name__ == "__main__":
         lista_bloques = json.loads(sys.argv[1])
         ejecutar(bloques_directos=lista_bloques)
     else:
-<<<<<<< HEAD
-        bloques = sys.argv[1:]
-        logging.info("Argumentos recibidos:"+ str(bloques))
-
-        respuesta_consulta_subredes = asyncio.run(business.iniciar_blacklist(bloques))
-        if respuesta_consulta_subredes:
-            logging.info("Proceso concluido")
-            print (os.path.abspath(respuesta_consulta_subredes))
-
-
-
-"""
-    bloques = ["200.67.0.0/20", "192.168.1.0/21"]
-        print("iniciando consulta")
-        respuesta = asyncio.run(business.iniciar_blacklist(bloques))
-        if respuesta is None:
-            print("No se pudo completar el análisis")    
-"""
-=======
         ejecutar()
->>>>>>> 26edf28 (Mejoras de legibilidad)
