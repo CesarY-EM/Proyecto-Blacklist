@@ -6,6 +6,5 @@ class ResultadoBloque(BaseModel):
     resultado: str
     hallazgos: List[dict] = []
 
-
     class Config:
         from_attributes=True
