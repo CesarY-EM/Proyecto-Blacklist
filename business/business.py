@@ -56,18 +56,7 @@ def obtener_muestra(sub_bloque):
             return hosts
 
         if prefijo == 24:
-            offsets = [
-                12,
-                38,
-                64,
-                90,
-                116,
-                142,
-                168,
-                194,
-                220,
-                246
-            ]
+            offsets = [12,38,64,90,116,142,168,194,220,246 ]
             muestra = []
             for offset in offsets:
                 ip = sub_bloque.network_address + offset
@@ -151,7 +140,7 @@ def evaluar_muestra(hallazgos, sub_bloque):
         bloque=str(sub_bloque), resultado="AUDITORIA", hallazgos=hallazgos)
 
 
-async def analizar_sub_bloques(sub_bloque, loop, executor, analisis_fases):
+async def analizar_sub_bloque(sub_bloque, loop, executor, analisis_fases):
     if analisis_fases:
         return await analizar_por_fases(sub_bloque, loop, executor)
 
@@ -170,8 +159,8 @@ async def procesar_sub_bloques(sub_bloques):
         logging.info("Iniciando análisis de sub-bloques")
 
         tareas = [
-            analizar_sub_bloques(sb, loop, executor, af)
-            for sb, af in sub_bloques
+            analizar_sub_bloques(sub_bloque, loop, executor, analisis_por_fases)
+            for sub_bloque, analisis_por_fases in sub_bloques
         ]
         logging.info(
             f"Procesando lote de {len(sub_bloques)} sub-bloques"
@@ -181,10 +170,10 @@ async def procesar_sub_bloques(sub_bloques):
             asyncio.gather(*tareas), timeout=1800)
 
         reporte = {}
-        for datos in resultados:
-            reporte[datos.bloque] = {
-                "ips": datos.hallazgos,
-                "resultado": datos.resultado
+        for resultado_bloque in resultados:
+            reporte[resultado_bloque.bloque] = {
+                "ips": resultado_bloque.hallazgos,
+                "resultado": resultado_bloque.resultado
             }
         logging.info("Análisis de sub-bloques terminado")
         return reporte
