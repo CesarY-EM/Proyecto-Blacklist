@@ -4,7 +4,7 @@ from typing import List
 class ResultadoBloque(BaseModel):
     bloque: str
     resultado: str
-    hallazgos: List[dict] = []
+    hallazgos: List[dict] = [] 
 
     class Config:
         from_attributes=True

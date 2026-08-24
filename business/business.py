@@ -1,49 +1,47 @@
+import sys
 import asyncio
 import ipaddress
-import sys
-
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 sys.path.append("/home/ngsop/lilaApp/plugins/utilidadesPlugins")
 from loggingConfig import LoggerFileConfig
 from constantesPlugins import LOG_CONFIG_FILES
-logging = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
-sys.path.append("/home/ngsop/lilaApp/core")
-from db.connectionDB import mongoConnection
-from utilidades.constantes import MONGO_DEFAULT_LILA
-
-from constants import constantes
+from constants.constants import Constants
+from models.models import ResultadoBloque
 from utils import utils
-from models import models
 
-COLECCION_REPORTES = "reportes"
-
-
-def guardar_en_mongo(resultados):
-    mongo_connection = None
-    try:
-        documento = {
-            "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "bloques": resultados,
-        }
-        mongo_connection = mongoConnection(MONGO_DEFAULT_LILA)
-        mongo_connection.saveData(documento, COLECCION_REPORTES)
-        logging.info("Resultados guardados en MongoDB correctamente")
-
-    except Exception as e:
-        logging.error(f"Error al guardar en MongoDB: {e}")
-
-    finally:
-        if mongo_connection:
-            try:
-                mongo_connection.close()
-            except Exception:
-                pass
+logger = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
 
-def obtener_muestra(sub_bloque):
+def obtener_bloques_a_procesar(bloques_directos):
+    """
+    Decide la fuente de los bloques a analizar (parámetro directo o cola de MongoDB).
+    Returns:
+        tuple: (id_doc, bloques, es_programada)
+    """
+    if bloques_directos:
+        logger.info(f"Argumentos recibidos por parámetro: {bloques_directos}")
+        return None, bloques_directos, False
+
+    logger.info("Sin argumentos directos — Consultando base de datos por tareas programadas...")
+    id_doc, bloques = utils.obtener_subredes_de_mongo()
+    return id_doc, bloques, True
+
+
+def notificar_resultado_programada(es_programada, id_doc):
+    """
+    Si la tarea proviene de Mongo, actualiza su estado para la gestión posterior en Java.
+    """
+    if es_programada and id_doc:
+        utils.actualizar_estado_ejecutado(id_doc)
+        logger.info(
+            f"Estado actualizado para ID {id_doc} — Java enviará el correo en los próximos 60 segundos."
+        )
+
+
+def obtener_ips_muestra(sub_bloque):
+    """Obtiene la muestra representativa de IPs a consultar."""
     prefijo = sub_bloque.prefixlen
 
     if 29 <= prefijo <= 32:
@@ -51,12 +49,11 @@ def obtener_muestra(sub_bloque):
 
     if 24 <= prefijo <= 28:
         hosts = list(sub_bloque.hosts())
-
         if len(hosts) <= 4:
             return hosts
 
         if prefijo == 24:
-            offsets = [12,38,64,90,116,142,168,194,220,246 ]
+            offsets = [12, 38, 64, 90, 116, 142, 168, 194, 220, 246]
             muestra = []
             for offset in offsets:
                 ip = sub_bloque.network_address + offset
@@ -76,12 +73,8 @@ def obtener_muestra(sub_bloque):
 
 
 async def consultar_fase(ips, loop, executor):
-    """
-    Responsabilidad única: consultar una lista de IPs contra el blacklist
-    y devolver solo los hallazgos (sin None).
-    """
     tareas = [
-        loop.run_in_executor(executor, utils.consultar_dominios, str(ip))
+        loop.run_in_executor(executor, utils.consultar_ip_en_blacklist, str(ip))
         for ip in ips
     ]
     resultados = await asyncio.gather(*tareas)
@@ -92,52 +85,27 @@ async def analizar_por_fases(sub_bloque, loop, executor):
     red = ipaddress.ip_network(sub_bloque, strict=False)
     hosts = list(red.hosts())
 
-    # Fase 1: 4 IPs
-    fase1 = obtener_muestra(red)
+    # Fase 1
+    fase1 = obtener_ips_muestra(red)
     hallazgos1 = await consultar_fase(fase1, loop, executor)
-
     if not hallazgos1:
-        return models.ResultadoBloque(bloque=str(sub_bloque), resultado="LIMPIO")
+        return ResultadoBloque(bloque=str(sub_bloque), resultado="LIMPIO")
 
-    # Fase 2: 10 IPs más
-    fase1_set = set(fase1)
-    restantes = [ip for ip in hosts if ip not in fase1_set]
+    # Fase 2
+    restantes = [ip for ip in hosts if ip not in set(fase1)]
     fase2 = restantes[:10]
     hallazgos2 = await consultar_fase(fase2, loop, executor)
-
     if not hallazgos2:
-        return models.ResultadoBloque(
-            bloque=str(sub_bloque),
-            resultado="AUDITORIA",
-            hallazgos=hallazgos1
-        )
+        return ResultadoBloque(bloque=str(sub_bloque), resultado="AUDITORIA", hallazgos=hallazgos1)
 
-    # Fase 3: 11 IPs más
-    fase2_set = set(fase2)
-    restantes = [ip for ip in restantes if ip not in fase2_set]
+    # Fase 3
+    restantes = [ip for ip in restantes if ip not in set(fase2)]
     fase3 = restantes[:11]
     hallazgos3 = await consultar_fase(fase3, loop, executor)
 
     todos = hallazgos1 + hallazgos2 + hallazgos3
-
-    if hallazgos3:
-        return models.ResultadoBloque(
-            bloque=str(sub_bloque), resultado="BLOQUEO", hallazgos=todos)
-
-    return models.ResultadoBloque(
-        bloque=str(sub_bloque), resultado="AUDITORIA", hallazgos=todos)
-
-
-def evaluar_muestra(hallazgos, sub_bloque):
-    """
-    Responsabilidad única: decidir LIMPIO vs AUDITORIA según los hallazgos.
-    No es async porque no hace ningún I/O — solo evalúa datos ya obtenidos.
-    """
-    if not hallazgos:
-        return models.ResultadoBloque(bloque=str(sub_bloque), resultado="LIMPIO")
-
-    return models.ResultadoBloque(
-        bloque=str(sub_bloque), resultado="AUDITORIA", hallazgos=hallazgos)
+    resultado_str = "BLOQUEO" if hallazgos3 else "AUDITORIA"
+    return ResultadoBloque(bloque=str(sub_bloque), resultado=resultado_str, hallazgos=todos)
 
 
 async def analizar_sub_bloque(sub_bloque, loop, executor, analisis_fases):
@@ -145,44 +113,31 @@ async def analizar_sub_bloque(sub_bloque, loop, executor, analisis_fases):
         return await analizar_por_fases(sub_bloque, loop, executor)
 
     sub_bloque_base = ipaddress.ip_network(sub_bloque, strict=False)
-    muestra = obtener_muestra(sub_bloque_base)
+    muestra = obtener_ips_muestra(sub_bloque_base)
     resultados_muestra = await consultar_fase(muestra, loop, executor)
 
-    return evaluar_muestra(resultados_muestra, sub_bloque)
+    if not resultados_muestra:
+        return ResultadoBloque(bloque=str(sub_bloque), resultado="LIMPIO")
+    return ResultadoBloque(bloque=str(sub_bloque), resultado="AUDITORIA", hallazgos=resultados_muestra)
 
 
 async def procesar_sub_bloques(sub_bloques):
     loop = asyncio.get_running_loop()
-    executor = ThreadPoolExecutor(max_workers=constantes.MAX_WORKERS)
+    executor = ThreadPoolExecutor(max_workers=Constants.MAX_WORKERS)
 
     try:
-        logging.info("Iniciando análisis de sub-bloques")
-
         tareas = [
-            analizar_sub_bloques(sub_bloque, loop, executor, analisis_por_fases)
-            for sub_bloque, analisis_por_fases in sub_bloques
+            analizar_sub_bloque(sb, loop, executor, fases)
+            for sb, fases in sub_bloques
         ]
-        logging.info(
-            f"Procesando lote de {len(sub_bloques)} sub-bloques"
-        )
-
-        resultados = await asyncio.wait_for(
-            asyncio.gather(*tareas), timeout=1800)
+        resultados = await asyncio.wait_for(asyncio.gather(*tareas), timeout=1800)
 
         reporte = {}
-        for resultado_bloque in resultados:
-            reporte[resultado_bloque.bloque] = {
-                "ips": resultado_bloque.hallazgos,
-                "resultado": resultado_bloque.resultado
-            }
-        logging.info("Análisis de sub-bloques terminado")
+        for r in resultados:
+            reporte[r.bloque] = {"ips": r.hallazgos, "resultado": r.resultado}
         return reporte
-
     finally:
-        try:
-            await loop.run_in_executor(None, executor.shutdown, True)
-        except (ValueError, RuntimeError) as e:
-            logging.error(f"Error cerrando executor: {e}")
+        executor.shutdown(wait=True)
 
 
 def dividir_bloque(bloque):
@@ -190,60 +145,62 @@ def dividir_bloque(bloque):
     prefijo = bloque_base.prefixlen
 
     if prefijo < 16:
-        raise ValueError(
-            f"Segmento no soportado: /{prefijo}. Solo se aceptan /16 a /32")
+        raise ValueError(f"Segmento no soportado: /{prefijo}. Solo se aceptan /16 a /32")
 
     if 16 <= prefijo <= 23:
-        return [(str(sub), True)
-                for sub in bloque_base.subnets(new_prefix=24)]
+        return [(str(sub), True) for sub in bloque_base.subnets(new_prefix=24)]
 
     return [(str(bloque_base), False)]
 
 
 def dividir_en_lotes(lista, tamano_lote=20):
-    """
-    Divide una lista en grupos para evitar lanzar cientos
-    de tareas simultáneas cuando se analiza un /16.
-    """
     for i in range(0, len(lista), tamano_lote):
         yield lista[i:i + tamano_lote]
 
 
 async def procesar_bloque(bloque):
-    """
-    Responsabilidad única: dividir un bloque, procesarlo en lotes y
-    devolver su resultado como dict. No maneja excepciones de negocio,
-    eso lo hace el llamador (iniciar_blacklist).
-    """
     sub_bloques = dividir_bloque(bloque)
-
-    logging.info(
-        f"Bloque {bloque} dividido en {len(sub_bloques)} sub-bloques"
-    )
-
     resultado_final = {}
     for lote in dividir_en_lotes(sub_bloques, 20):
         respuesta = await procesar_sub_bloques(lote)
         if respuesta:
             resultado_final.update(respuesta)
-
     return {"bloques": resultado_final}
 
 
 async def iniciar_blacklist(bloques):
     resultados = {}
-
     for bloque in bloques:
         try:
             resultados[str(bloque)] = await procesar_bloque(bloque)
-
-        except ValueError as e:
-            logging.error(f"Bloque rechazado {bloque}: {e}")
-            resultados[str(bloque)] = {"error": str(e)}
-
         except Exception as e:
-            logging.exception(e)
+            logger.error(f"Error procesando bloque {bloque}: {e}")
             resultados[str(bloque)] = {"error": str(e)}
-
-    guardar_en_mongo(resultados)
     return resultados
+
+
+def principal(bloques_directos=None):
+    """
+    Método de entrada unificado invocado por main.py.
+    """
+    logger.info("=== Iniciando ejecución del Plugin Blacklist ===")
+
+    id_doc, bloques, es_programada = obtener_bloques_a_procesar(bloques_directos)
+
+    if not bloques:
+        logger.error("No hay bloques que analizar — Abortando ejecución.")
+        return {"status": "NO_WORK"}
+
+    logger.info(f"Iniciando análisis de {len(bloques)} bloque(s): {bloques}")
+
+    respuesta = asyncio.run(iniciar_blacklist(bloques))
+
+    if not respuesta:
+        logger.error("El análisis no retornó resultados válidos.")
+        return {"status": "FAILED"}
+
+    logger.info("Análisis completado correctamente.")
+    notificar_resultado_programada(es_programada, id_doc)
+
+    print(respuesta)
+    return {"status": "SUCCESS", "data": respuesta}

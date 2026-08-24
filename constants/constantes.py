@@ -1,7 +1,7 @@
 from pydnsbl.providers import Provider
 
 MAX_WORKERS = 20
-
+ 
 PREFIJO_24 = 24
 PREFIJO_16 = 16
 
