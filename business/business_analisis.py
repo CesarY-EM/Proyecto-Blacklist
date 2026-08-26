@@ -12,6 +12,7 @@ from constants.constantes import Constants
 from models.models import ResultadoBloque
 from utils.DNSBL_utils import consultar_ip_en_blacklist
 from business.business_mongo import obtener_bloques_a_procesar, notificar_resultado_programada
+from utils.Validadores_utils import is_valid
 
 logger = LoggerFileConfig().crearLogFile(LOG_CONFIG_FILES.get("blacklist_check"))
 
@@ -160,6 +161,13 @@ def principal(bloques_directos: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Método de entrada unificado invocado por main.py.
     """
+    if not is_valid(bloques_directos):
+        logger.error(f"Payload de entrada inválido: {bloques_directos}")
+        return {
+            "status": "ERROR",
+            "message": "El payload de entrada es inválido. Se esperaba una lista con subredes/IPs válidas."
+        }
+    
     logger.info("=== Iniciando ejecución del Plugin Blacklist ===")
 
     id_doc, bloques, es_programada = obtener_bloques_a_procesar(bloques_directos)
